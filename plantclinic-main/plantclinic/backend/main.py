@@ -1,0 +1,213 @@
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import os
+from dotenv import load_dotenv
+from groq import Groq
+from google import genai
+from google.genai import types
+import base64
+import re
+import traceback
+import json
+
+load_dotenv()
+
+app = Flask(__name__)
+CORS(app, origins=["https://farmwisee.vercel.app", "http://localhost:5173", "http://localhost:5174"])
+
+# --- Clients ---
+groq_client = Groq(api_key=os.getenv("GROQ_KEY"))
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+client_gemini = genai.Client(api_key=os.getenv("GEMINI_KEY"))
+
+
+
+
+
+# ─────────────────────────────────────────────
+# FARMING TIP  (text only)
+# ─────────────────────────────────────────────
+@app.route('/api/farming-tip', methods=['POST'])
+def get_farming_tip():
+    try:
+        data = request.json
+
+        prompt = f"""You are an expert agricultural advisor. Based on the following weather data, give exactly 3 short, practical farming tips for a small-scale farmer. Each tip should be one clear, actionable sentence. Be specific and friendly, no greetings or sign-offs.
+
+Weather: {data.get('description')}
+Temperature: {data.get('temp')}°C (feels like {data.get('feelsLike')}°C)
+Humidity: {data.get('humidity')}%
+Wind speed: {data.get('wind')} km/h
+Location: {data.get('city')}
+
+Return ONLY a JSON array of exactly 3 strings. No markdown, no extra text."""
+
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        raw = response.choices[0].message.content.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+        tips = json.loads(raw)
+        if not isinstance(tips, list):
+            raise ValueError("Model did not return a list")
+
+        print("[farming-tip] Using Groq")
+        return jsonify({"tips": tips}), 200
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({
+            "error": str(e),
+            "tips": [
+                "Check your soil moisture before watering today.",
+                "Avoid spraying pesticides if it looks like rain is coming.",
+                "Make sure your drainage channels are clear.",
+            ]
+        }), 500
+
+
+# ─────────────────────────────────────────────
+# DISEASE DETECTION  (vision / multimodal)
+# ─────────────────────────────────────────────
+@app.route("/api/detect-disease", methods=["POST"])
+def detect_disease():
+    try:
+        data = request.get_json()
+        image_data = data.get("image")
+        crop_type  = data.get("crop", "unknown crop")
+
+        if not image_data:
+            return jsonify({"error": "No image provided"}), 400
+
+        mime_type = "image/jpeg"
+        if "," in image_data:
+            header, image_data = image_data.split(",", 1)
+            if "image/" in header:
+                mime_type = header.split(":")[1].split(";")[0]
+
+        image_bytes = base64.b64decode(image_data)
+
+        prompt = f"""You are an expert agricultural plant pathologist AI assistant, but you explain things the way you'd talk to a farmer, not a scientist. Avoid technical jargon, chemical names, and scientific terms. Use everyday words a farmer would understand.
+
+The farmer has submitted a photo of their crop for diagnosis. They have selected this as a {crop_type} plant.
+
+Analyze the image carefully. Your first task is to verify if the image actually shows a {crop_type} plant.
+If the image shows a different crop (e.g., you see a tomato but they selected maize), set `is_crop_mismatch` to true and specify the `detected_crop`.
+
+IMPORTANT: Do NOT guess when the image is blurry, low quality, too dark, or the disease symptoms are unclear.
+- If the plant looks healthy, return `status: "healthy"` and `disease_name: "None"`.
+- If the image is not clear enough to tell, return `status: "unclear"`, `disease_name: "Unable to determine"`, and a low confidence score.
+- If you are not confident the crop is the selected crop, set `status: "unclear"` instead of making a diagnosis.
+- For common diseases, only name a disease if the symptoms are clearly visible.
+
+Respond ONLY with a JSON object in this exact format (no markdown, no extra text):
+
+{{
+  "is_crop_mismatch": true or false,
+  "detected_crop": "The name of the crop you actually see (e.g., 'Tomato', 'Maize', 'Unknown')",
+  "status": "healthy" or "diseased" or "unclear",
+  "disease_name": "Name of the disease, or 'None' if healthy, or 'Unable to determine' if unclear",
+  "confidence": "A realistic assessment: High (clear symptoms) / Medium / Low (blurry or ambiguous)",
+  "description": "1-2 short, plain-language sentences describing what you see on the leaf and what it means, using simple words a farmer would use (e.g. 'brown patches' not 'necrotic lesions'). Mention the crop type you identified.",
+  "treatment": [
+    "Step 1: a simple, practical action the farmer can take, described in everyday terms rather than chemical names where possible",
+    "Step 2: a simple, practical action",
+    "Step 3: a simple, practical action"
+  ],
+  "prevention": "One short, plain-language prevention tip for next time",
+  "urgency": "Immediate action needed / Monitor closely / No action needed"
+}}
+
+If the image does not appear to be a plant or crop leaf at all, set status to "unclear" and explain in the description."""
+
+        raw = None
+
+        response = client_gemini.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[
+                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                prompt
+            ],
+            config=types.GenerateContentConfig(response_mime_type="application/json")
+        )
+        raw = response.text.strip()
+        print(f"[detect-disease] Using {GEMINI_MODEL}")
+
+        # Strip markdown fences if model wraps in ```json ... ```
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+
+        result = json.loads(raw)
+        if result.get("status") not in {"healthy", "diseased", "unclear"}:
+            result["status"] = "unclear"
+            result["disease_name"] = "Unable to determine"
+        return jsonify(result)
+
+    except Exception as e:
+        print(f"Disease detection error: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────
+# FARMING ADVICE (Practices page chat)
+# ─────────────────────────────────────────────
+@app.route("/api/farming-advice", methods=["POST"])
+def farming_advice():
+    try:
+        data     = request.get_json()
+        crop     = data.get("crop", "maize")
+        question = data.get("question", "")
+
+        if not question:
+            return jsonify({"error": "No question provided"}), 400
+
+        prompt = f"""You are FarmWise, a friendly farming advisor helping small-scale farmers in Nigeria.
+
+A farmer is asking about {crop} farming. Answer in plain, simple language — like you are talking to someone in the field, not a scientist.
+
+Rules:
+- Return ONLY a JSON array of bullet points. No intro, no sign-off, no markdown.
+- Each bullet is one clear sentence
+- Give exactly as many bullets as the question needs — not too few, not too many
+- If it's a simple factual question, answer it directly first, then add 2-3 useful related points
+- If it's a how-to question, give practical steps
+- Use simple words anyone can understand
+- Use local Nigerian context where relevant (markets, climate, common inputs)
+- If the question has nothing to do with farming, return: ["Sorry, I can only help with farming questions!"]
+
+Farmer's question: {question}"""
+
+        # --- Using Groq ---
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=300,
+        )
+
+        raw = response.choices[0].message.content.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+        bullets = json.loads(raw)
+        print(f"[farming-advice] Advice generated for {crop}")
+        return jsonify({"bullets": bullets})
+
+    except Exception as e:
+        print(f"Farming advice error: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────
+# HEALTH CHECK
+# ─────────────────────────────────────────────
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "ok"}), 200
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)

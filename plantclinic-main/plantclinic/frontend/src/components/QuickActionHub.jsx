@@ -1,0 +1,318 @@
+import { useState, useRef, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { getCachedWeather, resolveLocationAndFetch, friendlyDescription } from '../utils/weatherApi'
+
+const CROPS = [
+  { id: "maize",     label: "Maize",     emoji: "🌽" },
+  { id: "tomato",    label: "Tomato",    emoji: "🍅" },
+  { id: "pepper",    label: "Pepper",    emoji: "🫑" },
+  { id: "potato",    label: "Potato",    emoji: "🥔" },
+  { id: "groundnut", label: "Groundnut", emoji: "🥜" },
+];
+
+export default function QuickActionHub() {
+  const [activeTab, setActiveTab] = useState('diagnose') // 'diagnose' or 'weather'
+  const [step, setStep] = useState(1) // 1: Upload, 2: Select/Analyze, 3: Result
+  const [selectedCrop, setSelectedCrop] = useState("maize")
+  const [imagePreview, setImagePreview] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState(null)
+  const [weatherData, setWeatherData] = useState(null)
+  
+  const navigate = useNavigate()
+  const fileInputRef = useRef(null)
+
+  // 1. Handle Quick Diagnose Flow
+  const handleFile = (file) => {
+    if (!file || !file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setImagePreview(e.target.result);
+      setStep(2);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const runAnalysis = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/detect-disease`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: imagePreview, crop: selectedCrop }),
+      });
+      const data = await res.json();
+      setResult(data);
+      setStep(3);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const viewFullDiagnosis = () => {
+    navigate('/crop-health', {
+      state: { image: imagePreview, crop: selectedCrop, result }
+    });
+  };
+
+  const resetDiagnose = () => {
+    setImagePreview(null);
+    setResult(null);
+    setStep(1);
+  };
+
+  // 2. Weather Advisory with Geolocation
+  useEffect(() => {
+    if (activeTab !== 'weather' || weatherData) return
+
+    const toFlat = (b) => ({
+      city: b.locationName,
+      temp: Math.round(b.current.temperature_2m),
+      condition: friendlyDescription(b.current.weather_code, b.current.is_day),
+      humidity: b.current.relative_humidity_2m,
+      wind: Math.round(b.current.wind_speed_10m),
+      tips: b.tips,
+    })
+
+    const cached = getCachedWeather()
+    if (cached) {
+      setWeatherData(toFlat(cached))
+      return
+    }
+
+    setLoading(true)
+    resolveLocationAndFetch(
+      (bundle) => { setWeatherData(toFlat(bundle)); setLoading(false) },
+      () => {
+        setWeatherData({
+          city: 'Kano', temp: 32, condition: 'Sunny',
+          tips: [
+            'Check your soil moisture before watering today.',
+            'Avoid spraying pesticides if it looks like rain is coming.',
+            'Make sure your drainage channels are clear.',
+          ],
+          humidity: 40, wind: 10,
+        })
+        setLoading(false)
+      }
+    )
+  }, [activeTab, weatherData]);
+
+  const loadingWeather = activeTab === 'weather' && !weatherData && loading;
+
+  return (
+    <div id="quick-hub" className="w-full max-w-xl mx-auto bg-white/60 backdrop-blur-3xl border border-white/80 rounded-[2.5rem] p-5 shadow-2xl shadow-[#6BA876]/5 relative overflow-hidden transition-all duration-500 hover:shadow-BA7517/10">
+      
+      {/* Tab Nav */}
+      <div className="flex bg-[#F5EDD8]/50 rounded-full p-1.5 mb-8 relative z-10">
+        <button 
+          onClick={() => setActiveTab('diagnose')}
+          className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider rounded-full transition-all duration-300 ${activeTab === 'diagnose' ? 'bg-[#1B4D2E] text-[#D4EDD4] shadow-xl' : 'text-[#4A8C5A] hover:bg-[#A8D5A8]/20'}`}
+        >
+          Diagnose Crop
+        </button>
+        <button 
+          onClick={() => setActiveTab('weather')}
+          className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider rounded-full transition-all duration-300 ${activeTab === 'weather' ? 'bg-[#1B4D2E] text-[#D4EDD4] shadow-xl' : 'text-[#4A8C5A] hover:bg-[#A8D5A8]/20'}`}
+        >
+          Check Weather
+        </button>
+      </div>
+
+      <div className="relative z-10 px-2 pb-2 min-h-[240px] flex flex-col justify-center">
+
+        {/* ── DIAGNOSE TAB ── */}
+        {activeTab === 'diagnose' && (
+          <div className="animate-in fade-in zoom-in-95 duration-300">
+
+            {step === 1 && (
+              <div 
+                className="w-full border-2 border-dashed border-[#D4B896] hover:border-[#6BA876] rounded-3xl p-8 text-center transition-all bg-white/30 group"
+              >
+                <div className="mb-6 flex flex-col items-center group-hover:scale-105 transition-transform duration-300">
+                  <div className="bg-[#D4EDD4] p-4 rounded-2xl mb-4 shadow-sm">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" className="text-[#6BA876]">
+                      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      <circle cx="12" cy="13" r="4" stroke="currentColor" strokeWidth="2"/>
+                    </svg>
+                  </div>
+                  <h4 className="text-[#1B4D2E] font-bold text-xl mb-1">Diagnose your crop</h4>
+                  <p className="text-[#4A8C5A] text-sm opacity-80">Pick a tool below to begin</p>
+                </div>
+                
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <button
+                    onClick={() => fileInputRef.current.click()}
+                    className="flex-1 bg-[#1B4D2E] text-white font-bold py-3 px-6 rounded-xl hover:bg-[#2D6B44] transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#1B4D2E]/10"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      <polyline points="17 8 12 3 7 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      <line x1="12" y1="3" x2="12" y2="15" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                    </svg>
+                    Upload Photo
+                  </button>
+                  <button
+                    onClick={() => { const c = document.createElement('input'); c.type='file'; c.accept='image/*'; c.capture='environment'; c.onchange=(e)=>handleFile(e.target.files[0]); c.click() }}
+                    className="flex-1 bg-white text-[#1B4D2E] border border-[#F0E6D0] font-bold py-3 px-6 rounded-xl hover:bg-[#D4EDD4] transition-all flex items-center justify-center gap-2 shadow-sm"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      <circle cx="12" cy="13" r="4" stroke="currentColor" strokeWidth="2"/>
+                    </svg>
+                    Snap Photo
+                  </button>
+                </div>
+                <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => handleFile(e.target.files[0])} />
+              </div>
+            )}
+
+            {step === 2 && (
+              <div className="flex flex-col items-center">
+                <img src={imagePreview} className="w-24 h-24 object-cover rounded-2xl mb-6 shadow-md border-2 border-white" alt="Preview" />
+                <p className="text-xs font-bold text-[#6BA876] uppercase tracking-widest mb-4">What crop is this?</p>
+                <div className="flex flex-wrap justify-center gap-2 mb-8">
+                  {CROPS.map(c => (
+                    <button
+                      key={c.id}
+                      onClick={() => setSelectedCrop(c.id)}
+                      className={`px-4 py-2 rounded-full text-[11px] font-bold transition-all ${selectedCrop === c.id ? 'bg-[#6BA876] text-white shadow-lg' : 'bg-white text-[#4A8C5A] border border-[#A8D5A8]/30'}`}
+                    >
+                      {c.emoji} {c.label}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  disabled={loading}
+                  onClick={runAnalysis}
+                  className="w-full bg-[#1B4D2E] text-white font-bold py-4 rounded-2xl shadow-xl hover:bg-[#2D6B44] transition-all flex items-center justify-center gap-3"
+                >
+                  {loading ? <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : null}
+                  {loading ? "Checking plant..." : "Check for Sickness"}
+                </button>
+                <button onClick={resetDiagnose} className="mt-4 text-xs text-[#4A8C5A] hover:underline font-medium">Cancel and restart</button>
+              </div>
+            )}
+
+            {step === 3 && result && (
+              <div className="text-center">
+                <div className="inline-flex items-center gap-2 px-3 py-1 bg-red-50 text-red-600 rounded-full text-[10px] font-bold mb-4 uppercase tracking-wider">
+                  <span className="w-1.5 h-1.5 rounded-full bg-red-600 animate-pulse" />
+                  {result.status}
+                </div>
+                <h3 className="text-2xl font-bold text-[#1B4D2E] mb-3">{result.disease_name}</h3>
+
+                {/* Description as bullet points */}
+                <ul className="text-left flex flex-col gap-2 mb-8 px-2">
+                  {(result.description || '').split(/(?<=[.!?])\s+/).filter(Boolean).map((sentence, i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-[#6BA876] shrink-0" />
+                      <span className="text-[#4A8C5A] text-sm leading-relaxed">{sentence}</span>
+                    </li>
+                  ))}
+                </ul>
+
+                <div className="flex flex-col gap-3">
+                  <button
+                    onClick={viewFullDiagnosis}
+                    className="w-full bg-[#6BA876] text-white font-bold py-4 rounded-2xl shadow-xl hover:bg-[#855310] transition-all"
+                  >
+                    View Full Analysis & Treatment
+                  </button>
+                  <button onClick={resetDiagnose} className="text-xs text-[#4A8C5A] font-medium hover:underline">Check another plant</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── WEATHER TAB ── */}
+        {activeTab === 'weather' && (
+          <div className="animate-in fade-in zoom-in-95 duration-300 w-full">
+
+            {/* Loading state */}
+            {loadingWeather && (
+              <div className="flex flex-col items-center justify-center py-16 gap-4">
+                <div className="w-10 h-10 border-2 border-[#A8D5A8] border-t-[#6BA876] rounded-full animate-spin" />
+                <p className="text-sm text-[#4A8C5A]">Fetching weather data...</p>
+              </div>
+            )}
+
+            {/* Weather content */}
+            {weatherData && (
+              <>
+                {/* Weather Card */}
+                <div className="bg-white rounded-[2rem] p-6 shadow-sm border border-[#F0E6D0] mb-6 relative overflow-hidden">
+                  <div className="flex items-start justify-between mb-8">
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 bg-[#6BA876] rounded-2xl flex items-center justify-center shrink-0 shadow-lg shadow-[#6BA876]/20">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                          <circle cx="12" cy="12" r="5" stroke="#D4EDD4" strokeWidth="2"/>
+                          <path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" stroke="#D4EDD4" strokeWidth="2" strokeLinecap="round"/>
+                        </svg>
+                      </div>
+                      <div>
+                        <div className="text-base font-bold text-[#1B4D2E]">{weatherData.city}</div>
+                        <div className="text-[10px] font-bold text-[#6BA876] uppercase tracking-wider">Today's Forecast</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-end justify-between mb-8">
+                    <div className="text-7xl font-medium text-[#1B4D2E] tracking-tighter">
+                      {weatherData.temp}°
+                    </div>
+                    <div className="text-right space-y-1">
+                      <div className="text-[13px] text-[#4A8C5A]">Humidity: <span className="font-bold text-[#1B4D2E]">{weatherData.humidity}%</span></div>
+                      <div className="text-[13px] text-[#4A8C5A]">Wind: <span className="font-bold text-[#1B4D2E]">{weatherData.wind} km/h</span></div>
+                      <div className="text-[13px] font-bold text-[#6BA876]">{weatherData.condition}</div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <span className="bg-[#D4EDD4] text-[#2D6B44] text-[10px] font-bold px-4 py-1.5 rounded-full border border-[#A8D5A8]/30 shadow-sm">Real-time data</span>
+                    <span className="bg-[#D4EDD4] text-[#2D6B44] text-[10px] font-bold px-4 py-1.5 rounded-full border border-[#A8D5A8]/30 shadow-sm">Farm Advisory</span>
+                  </div>
+                </div>
+
+                {/* Smart Advisory — bullet points */}
+                <div className="bg-[#F5FFFB] border border-[#A8D5A8]/20 p-5 rounded-3xl mb-6 relative overflow-hidden group hover:border-[#6BA876]/40 transition-colors">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-6 h-6 bg-[#6BA876]/10 rounded-full flex items-center justify-center">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" className="text-[#6BA876]">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </div>
+                    <span className="text-[11px] font-bold text-[#6BA876] uppercase tracking-widest">Smart Advisory</span>
+                  </div>
+                  <ul className="flex flex-col gap-2">
+                    {(weatherData.tips || []).map((tip, i) => (
+                      <li key={i} className="flex items-start gap-2">
+                        <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-[#6BA876] shrink-0" />
+                        <span className="text-[#2D6B44] text-sm leading-relaxed">{tip}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="absolute top-0 right-0 w-16 h-16 bg-[#6BA876]/5 rounded-full blur-xl pointer-events-none" />
+                </div>
+
+                <button
+                  onClick={() => navigate('/weather')}
+                  className="w-full bg-[#1B4D2E] text-white font-bold py-4 rounded-2xl hover:bg-[#2D6B44] transition-all shadow-xl shadow-[#1B4D2E]/10"
+                >
+                  See Full Weekly Forecast
+                </button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Internal Accents */}
+      <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-[#A8D5A8]/10 to-transparent rounded-full blur-2xl pointer-events-none" />
+      <div className="absolute bottom-0 left-0 w-32 h-32 bg-gradient-to-tr from-[#6BA876]/5 to-transparent rounded-full blur-2xl pointer-events-none" />
+    </div>
+  )
+}
