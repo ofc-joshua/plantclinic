@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
 from dotenv import load_dotenv
-from groq import Groq
 from google import genai
 from google.genai import types
 import base64
@@ -16,8 +15,7 @@ app = Flask(__name__)
 CORS(app, origins=["https://farmwisee.vercel.app", "http://localhost:5173", "http://localhost:5174"])
 
 # --- Clients ---
-groq_client = Groq(api_key=os.getenv("GROQ_KEY"))
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 client_gemini = genai.Client(api_key=os.getenv("GEMINI_KEY"))
 
 
@@ -42,18 +40,19 @@ Location: {data.get('city')}
 
 Return ONLY a JSON array of exactly 3 strings. No markdown, no extra text."""
 
-        response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}]
+        response = client_gemini.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(response_mime_type="application/json")
         )
-        raw = response.choices[0].message.content.strip()
+        raw = response.text.strip()
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
         raw = re.sub(r"\s*```$", "", raw)
         tips = json.loads(raw)
         if not isinstance(tips, list):
             raise ValueError("Model did not return a list")
 
-        print("[farming-tip] Using Groq")
+        print("[farming-tip] Using Gemini")
         return jsonify({"tips": tips}), 200
 
     except Exception as e:
@@ -180,14 +179,14 @@ Rules:
 
 Farmer's question: {question}"""
 
-        # --- Using Groq ---
-        response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=300,
+        # --- Using Gemini ---
+        response = client_gemini.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(response_mime_type="application/json")
         )
 
-        raw = response.choices[0].message.content.strip()
+        raw = response.text.strip()
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
         raw = re.sub(r"\s*```$", "", raw)
         bullets = json.loads(raw)

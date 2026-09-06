@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { Link } from "react-router-dom";
 
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+
 // ── Crop Data ────────────────────────────────────────────────────────────────
 const CROPS = [
   {
@@ -261,7 +263,7 @@ export default function Practices() {
     setInput("");
     setChatLoading(true);
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/farming-advice`, {
+      const res = await fetch(`${API_URL}/api/farming-advice`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ crop: activeCrop.label, question: text }),
